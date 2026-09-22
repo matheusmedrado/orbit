@@ -341,30 +341,58 @@ private struct AccountsSection: View {
     }
 }
 
-private struct CredentialRow: View {
+struct CredentialRow: View {
     let credential: CredentialInfo
     let source: String
     @Environment(UsageStore.self) private var store
+    @State private var confirming = CredentialRow.previewConfirming
+
+    /// Lets `Orbit --snapshot ... --confirm-remove` render the confirmation state.
+    nonisolated(unsafe) static var previewConfirming = false
 
     var body: some View {
-        HStack(spacing: 6) {
-            Circle().fill(stateColor).frame(width: 6, height: 6)
-            Text(credential.source)
-            if let hint = credential.hint {
-                Text(hint).font(.caption.monospaced()).foregroundStyle(.tertiary).lineLimit(1)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Circle().fill(stateColor).frame(width: 6, height: 6)
+                Text(credential.source)
+                if let hint = credential.hint {
+                    Text(hint).font(.caption.monospaced()).foregroundStyle(.tertiary).lineLimit(1)
+                }
+                Spacer(minLength: 4)
+                if !source.isEmpty {
+                    Text(source).foregroundStyle(.tertiary)
+                }
+                if credential.keychainService != nil, !confirming {
+                    Button("Remove") { confirming = true }
+                        .buttonStyle(.link)
+                }
             }
-            Spacer(minLength: 4)
-            if !source.isEmpty {
-                Text(source).foregroundStyle(.tertiary)
-            }
-            if let service = credential.keychainService {
-                Button("Remove") { Task { await store.removeKey(service) } }
-                    .buttonStyle(.link)
+            .help(stateText)
+
+            if confirming, let service = credential.keychainService {
+                RemoveConfirmation(warning: removalWarning(service)) {
+                    confirming = false
+                    Task { await store.removeKey(service) }
+                } cancel: {
+                    confirming = false
+                }
             }
         }
         .font(.caption)
         .foregroundStyle(.secondary)
-        .help(stateText)
+        .animation(.smooth(duration: 0.2), value: confirming)
+    }
+
+    /// Deleting a key is permanent, so say exactly what stops working.
+    private func removalWarning(_ service: String) -> String {
+        switch service {
+        case Keychain.claudeToken:
+            "This deletes the token from your Keychain. Your shell and Claude Code lose it too if they read it from there, and getting it back means creating a new token."
+        case Keychain.anthropicAdminKey, Keychain.openAIAdminKey:
+            "This deletes the Admin key from your Keychain. Orbit will stop showing API spend until you add it again."
+        default:
+            "This deletes the key from your Keychain."
+        }
     }
 
     private var stateColor: Color {
@@ -382,6 +410,30 @@ private struct CredentialRow: View {
         case .missing: "Not found"
         case .unchecked: "Not checked yet"
         }
+    }
+}
+
+private struct RemoveConfirmation: View {
+    let warning: String
+    let confirm: () -> Void
+    let cancel: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(warning)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 8) {
+                Spacer()
+                Button("Cancel", action: cancel)
+                    .controlSize(.small)
+                    .keyboardShortcut(.cancelAction)
+                Button("Remove", role: .destructive, action: confirm)
+                    .controlSize(.small)
+            }
+        }
+        .padding(10)
+        .background(Color.red.opacity(0.1), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
     }
 }
 
