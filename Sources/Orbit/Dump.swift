@@ -8,7 +8,7 @@ enum Dump {
         guard CommandLine.arguments.contains("--dump") else { return }
         Task.detached {
             let start = Date()
-            let claude = await ClaudeProvider.fetch(previous: ProviderSnapshot(id: .claude), logs: ClaudeLogScanner())
+            let claude = await ClaudeProvider.fetch(previous: ProviderSnapshot(id: .claude), logs: ClaudeLogScanner(), login: ClaudeCodeLogin.Reader())
             let codex = await CodexProvider.fetch(previous: ProviderSnapshot(id: .codex), logs: CodexLogScanner())
             for s in [claude, codex] { print(describe(s)) }
             print(String(format: "fetched in %.2fs", Date().timeIntervalSince(start)))
@@ -42,7 +42,8 @@ enum Dump {
             let reset = w.remaining(at: now).map { "resets in \(Fmt.duration($0))" } ?? "no reset"
             out.append("  \(w.label): \(Fmt.percent(w.utilization)) · \(reset)")
         }
-        out.append("  source: \(s.limitsLive ? "live" : "logs") · credential: \(s.credential.map { "\($0.source) \($0.hint ?? "") \($0.state)" } ?? "none")")
+        out.append("  limits: \(s.limitsLive ? "live" : "logs") · credentials: " + (s.credentials.isEmpty ? "none" : s.credentials.map { "\($0.source) \($0.hint ?? "") \($0.state)" }.joined(separator: ", ")))
+        if let spend = s.spend { out.append("  spend: \(spend.format(spend.today)) today · \(spend.format(spend.month)) this month") }
         let l = s.local
         out.append("  tokens today \(Fmt.compact(l.today.total)) · 5h \(Fmt.compact(l.last5h.total)) · 7d \(Fmt.compact(l.week.total)) · calls today \(l.messagesToday)")
         out.append("  burn \(Fmt.compact(Int(l.burnPerMinute)))/min · cache hit \(l.week.cacheHitRate.map(Fmt.percent) ?? "-") · last activity \(Fmt.ago(l.lastActivity, now: now))")

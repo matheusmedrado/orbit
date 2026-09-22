@@ -16,18 +16,27 @@ final class UsageStore {
     @ObservationIgnored private var paused = false
     @ObservationIgnored private let claudeLogs = ClaudeLogScanner()
     @ObservationIgnored private let codexLogs = CodexLogScanner()
+    @ObservationIgnored private let claudeLogin = ClaudeCodeLogin.Reader()
+    /// Which card is showing the key editor, if any.
+    var editingKeyFor: ProviderID?
     @ObservationIgnored private var observers: [(NotificationCenter, NSObjectProtocol)] = []
 
     static let intervals: [TimeInterval] = [30, 60, 120, 300]
 
     var snapshots: [ProviderSnapshot] { [claude, codex] }
 
+    /// Cards to show: the providers in use, or both when nothing is set up yet.
+    var visibleSnapshots: [ProviderSnapshot] {
+        let used = snapshots.filter { $0.isInUse || editingKeyFor == $0.id }
+        return used.isEmpty ? snapshots : used
+    }
+
     var severity: IconSeverity {
         let live = snapshots.filter { !$0.windows.isEmpty }
         if live.contains(where: { if case .limited = $0.health { true } else { false } }) { return .critical }
         let peak = live.map(\.peakUtilization).max() ?? 0
         if peak >= 0.9 { return .critical }
-        if peak >= 0.75 || claude.credential?.state == .rejected || claude.credential?.state == .missing { return .warning }
+        if peak >= 0.75 || snapshots.contains(where: \.hasRejectedCredential) { return .warning }
         return .normal
     }
 
@@ -37,7 +46,7 @@ final class UsageStore {
 
     /// What the orb's face should look like right now. Status is carried by expression.
     var face: (expression: FaceExpression, palette: OrbPalette) {
-        if [.rejected, .missing].contains(claude.credential?.state) { return (.dizzy, .white) }
+        if snapshots.contains(where: \.hasRejectedCredential) { return (.dizzy, .white) }
         if severity == .critical { return (.cross, .red) }
         if celebrating { return (.happy, .white) }
         if severity == .warning { return (.doubtful, .white) }
@@ -57,7 +66,7 @@ final class UsageStore {
         guard !isRefreshing else { return }
         if !force, let last = lastRefresh, Date().timeIntervalSince(last) < 15 { return }
         isRefreshing = true
-        async let c = ClaudeProvider.fetch(previous: claude, logs: claudeLogs)
+        async let c = ClaudeProvider.fetch(previous: claude, logs: claudeLogs, login: claudeLogin)
         async let x = CodexProvider.fetch(previous: codex, logs: codexLogs)
         let (newClaude, newCodex) = await (c, x)
         if Self.didReset(from: claude, to: newClaude) || Self.didReset(from: codex, to: newCodex) {
@@ -107,10 +116,22 @@ final class UsageStore {
     /// Re-read in case it was changed from System Settings.
     func refreshLoginItem() { loginItem = .current }
 
-    func saveClaudeToken(_ token: String) async -> Bool {
-        guard Keychain.saveClaudeToken(token) else { return false }
+    /// Stores a pasted token or Admin key in the Keychain. Returns an error message on failure.
+    func saveKey(_ raw: String) async -> String? {
+        let key = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let kind = KeyKind(key)
+        if let problem = kind.problem { return problem }
+        guard let service = kind.keychainService, Keychain.save(key, service: service, label: kind.label) else {
+            return "Couldn't save to the Keychain."
+        }
+        editingKeyFor = nil
         await refresh(force: true)
-        return true
+        return nil
+    }
+
+    func removeKey(_ service: String) async {
+        Keychain.delete(service)
+        await refresh(force: true)
     }
 
     // MARK: - Scheduling

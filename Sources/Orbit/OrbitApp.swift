@@ -6,6 +6,7 @@ struct OrbitApp: App {
     @State private var animator = FaceAnimator()
 
     init() {
+        SelfTest.runIfRequested()
         Dump.runIfRequested()
     }
 

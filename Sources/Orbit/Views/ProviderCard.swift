@@ -6,11 +6,13 @@ struct ProviderCard: View {
     let now: Date
 
     @State private var expanded = false
-    @State private var editingToken = false
+    @Environment(UsageStore.self) private var store
 
     private var accent: Color { snapshot.id.accent }
-    private var credentialProblem: Bool {
-        [.rejected, .missing].contains(snapshot.credential?.state)
+    private var editing: Bool { store.editingKeyFor == snapshot.id }
+    /// Show the accounts section when something needs attention.
+    private var needsAttention: Bool {
+        snapshot.credentials.isEmpty || snapshot.hasRejectedCredential
     }
 
     var body: some View {
@@ -29,13 +31,12 @@ struct ProviderCard: View {
                 Text("Loading…").font(.callout).foregroundStyle(.secondary)
             }
 
-            if expanded || credentialProblem {
-                if let credential = snapshot.credential {
-                    CredentialRow(credential: credential, source: limitsSource, editing: $editingToken)
-                }
-                if editingToken {
-                    TokenEditor(isPresented: $editingToken)
-                }
+            if let spend = snapshot.spend {
+                SpendRow(spend: spend)
+            }
+
+            if expanded || needsAttention || editing {
+                AccountsSection(snapshot: snapshot, limitsSource: limitsSource)
             }
 
             summaryRow
@@ -48,7 +49,7 @@ struct ProviderCard: View {
         .padding(14)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .animation(.smooth(duration: 0.25), value: expanded)
-        .animation(.smooth(duration: 0.25), value: editingToken)
+        .animation(.smooth(duration: 0.25), value: editing)
     }
 
     private var titleRow: some View {
@@ -286,10 +287,64 @@ private struct BarList: View {
     }
 }
 
+/// API spend from an Admin key.
+private struct SpendRow: View {
+    let spend: Spend
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 18) {
+            amount(spend.today, "today")
+            amount(spend.month, "this month")
+            Spacer()
+            Text("API")
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 1.5)
+                .background(.quaternary, in: Capsule())
+        }
+        .help("API spend, in UTC days")
+    }
+
+    private func amount(_ value: Double, _ label: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(spend.format(value))
+                .font(.system(size: 17, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .contentTransition(.numericText())
+            Text(label).font(.caption).foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// The logins and keys a card uses, with a way to add or remove Orbit-managed keys.
+private struct AccountsSection: View {
+    let snapshot: ProviderSnapshot
+    let limitsSource: String
+    @Environment(UsageStore.self) private var store
+
+    private var editing: Bool { store.editingKeyFor == snapshot.id }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            ForEach(snapshot.credentials) { credential in
+                CredentialRow(credential: credential, source: credential.keychainService == nil ? limitsSource : "")
+            }
+            if editing {
+                KeyEditor(provider: snapshot.id)
+            } else {
+                Button(snapshot.credentials.isEmpty ? "Connect…" : "Add a key…") { store.editingKeyFor = snapshot.id }
+                    .buttonStyle(.link)
+                    .font(.caption)
+            }
+        }
+    }
+}
+
 private struct CredentialRow: View {
     let credential: CredentialInfo
     let source: String
-    @Binding var editing: Bool
+    @Environment(UsageStore.self) private var store
 
     var body: some View {
         HStack(spacing: 6) {
@@ -299,16 +354,17 @@ private struct CredentialRow: View {
                 Text(hint).font(.caption.monospaced()).foregroundStyle(.tertiary).lineLimit(1)
             }
             Spacer(minLength: 4)
-            if credential.editable {
-                Button(editing ? "Cancel" : (credential.state == .missing ? "Add token" : "Update")) { editing.toggle() }
-                    .buttonStyle(.link)
-            } else if !source.isEmpty {
+            if !source.isEmpty {
                 Text(source).foregroundStyle(.tertiary)
+            }
+            if let service = credential.keychainService {
+                Button("Remove") { Task { await store.removeKey(service) } }
+                    .buttonStyle(.link)
             }
         }
         .font(.caption)
         .foregroundStyle(.secondary)
-        .help(stateText + (source.isEmpty ? "" : " · limits: \(source)"))
+        .help(stateText)
     }
 
     private var stateColor: Color {
@@ -321,28 +377,37 @@ private struct CredentialRow: View {
 
     private var stateText: String {
         switch credential.state {
-        case .valid: "Credential is valid"
-        case .rejected: "Credential was rejected"
-        case .missing: "No credential found"
+        case .valid: "Working"
+        case .rejected: "Rejected"
+        case .missing: "Not found"
         case .unchecked: "Not checked yet"
         }
     }
 }
 
-private struct TokenEditor: View {
-    @Binding var isPresented: Bool
+private struct KeyEditor: View {
+    let provider: ProviderID
     @Environment(UsageStore.self) private var store
     @State private var draft = ""
-    @State private var failed = false
+    @State private var error: String?
     @FocusState private var focused: Bool
 
     private var trimmed: String { draft.trimmingCharacters(in: .whitespacesAndNewlines) }
-    private var looksValid: Bool { trimmed.hasPrefix("sk-ant-") && trimmed.count > 40 }
+
+    private var placeholder: String {
+        provider == .claude ? "Paste a token or Admin key" : "Paste an Admin key"
+    }
+
+    private var hint: String {
+        provider == .claude
+            ? "A token from claude setup-token (sk-ant-oat…), or an Admin key (sk-ant-admin…) for API spend. Saved to your Keychain only."
+            : "sk-admin… from OpenAI Platform > Settings > Admin keys. Saved to your Keychain only."
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
-                SecureField("Paste sk-ant-oat01-… token", text: $draft)
+                SecureField(placeholder, text: $draft)
                     .textFieldStyle(.roundedBorder)
                     .font(.caption.monospaced())
                     .focused($focused)
@@ -350,24 +415,23 @@ private struct TokenEditor: View {
                 Button("Save", action: save)
                     .controlSize(.small)
                     .keyboardShortcut(.defaultAction)
-                    .disabled(!looksValid)
+                    .disabled(trimmed.count < 20)
+                Button("Cancel") { store.editingKeyFor = nil }
+                    .controlSize(.small)
             }
-            Text(failed ? "Couldn't write to Keychain." : "Saved to your macOS Keychain only.")
+            Text(error ?? hint)
                 .font(.caption)
-                .foregroundStyle(failed ? .red : .secondary)
+                .foregroundStyle(error == nil ? Color.secondary : Color.red)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .onAppear { focused = true }
     }
 
     private func save() {
-        guard looksValid else { return }
+        guard trimmed.count >= 20 else { return }
         Task {
-            if await store.saveClaudeToken(trimmed) {
-                draft = ""
-                isPresented = false
-            } else {
-                failed = true
-            }
+            error = await store.saveKey(trimmed)
+            if error == nil { draft = "" }
         }
     }
 }

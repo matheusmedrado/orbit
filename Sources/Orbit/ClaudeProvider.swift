@@ -1,39 +1,95 @@
 import Foundation
 
 enum ClaudeProvider {
-    static func fetch(previous: ProviderSnapshot, logs: ClaudeLogScanner) async -> ProviderSnapshot {
+    /// Subscription limits come from a setup token or Claude Code's own login; API spend
+    /// comes from an Admin key. Any combination can be present.
+    static func fetch(previous: ProviderSnapshot, logs: ClaudeLogScanner, login: ClaudeCodeLogin.Reader) async -> ProviderSnapshot {
         var snap = ProviderSnapshot(id: .claude)
         snap.local = LocalStats.build(from: await logs.scan())
+        var problems: [String] = []
+        var offline = false
+        var limitsHealth: ProviderHealth = .ok
 
-        guard let token = Keychain.readClaudeToken() else {
-            snap.health = .error("No token found in Keychain. Add one below.")
-            snap.credential = CredentialInfo(source: "Keychain", hint: nil, state: .missing, editable: true)
-            return snap
+        func previousState(_ source: String) -> CredentialState {
+            previous.credentials.first { $0.source == source }?.state ?? .unchecked
         }
-        snap.credential = CredentialInfo(source: "Keychain", hint: Fmt.mask(token), state: .unchecked, editable: true)
 
-        do {
-            let probe = try await ClaudeLimitsAPI.probe(token: token)
-            snap.windows = probe.windows
-            snap.health = probe.health
-            snap.notes = probe.notes
-            snap.limitsUpdated = Date()
-            snap.limitsLive = true
-            snap.credential?.state = .valid
-        } catch FetchError.unauthorized {
-            snap.health = .error("Token was rejected. It may have been revoked or expired.")
-            snap.credential?.state = .rejected
-        } catch {
-            // Keep the last known numbers rather than blanking the UI on a flaky network.
-            snap.windows = previous.windows
-            snap.limitsUpdated = previous.limitsUpdated
-            snap.notes = previous.notes
-            snap.credential?.state = previous.credential?.state ?? .unchecked
-            let reason = (error as? FetchError).flatMap { if case .failed(let m) = $0 { m } else { nil } } ?? error.localizedDescription
-            snap.health = .warning("Couldn't reach Anthropic (\(reason)). Showing last known limits.")
+        // Subscription limits. A setup token wins over the Claude Code login.
+        var subscription: (token: String, info: CredentialInfo)?
+        if let token = Keychain.read(Keychain.claudeToken) {
+            subscription = (token, CredentialInfo(source: "Claude token", hint: Fmt.mask(token), state: .unchecked, keychainService: Keychain.claudeToken))
+        } else if let cc = await login.current() {
+            snap.plan = cc.plan
+            let info = CredentialInfo(source: "Claude Code login", hint: nil, state: .unchecked)
+            if cc.isExpired {
+                snap.credentials.append(CredentialInfo(source: info.source, state: .rejected))
+                problems.append("Your Claude Code login has expired. Open Claude Code once to refresh it.")
+            } else {
+                subscription = (cc.accessToken, info)
+            }
         }
+        if let subscription {
+            let token = subscription.token
+            var info = subscription.info
+            do {
+                let probe = try await ClaudeLimitsAPI.probe(token: token)
+                snap.windows = probe.windows
+                snap.notes = probe.notes
+                snap.limitsUpdated = Date()
+                snap.limitsLive = true
+                limitsHealth = probe.health
+                info.state = .valid
+            } catch FetchError.unauthorized {
+                info.state = .rejected
+                if info.keychainService == nil {
+                    await login.invalidate()
+                    problems.append("Claude Code's login was rejected. Sign in to Claude Code again.")
+                } else {
+                    problems.append("Your Claude token was rejected. It may have been revoked or expired.")
+                }
+            } catch {
+                // Keep the last known numbers rather than blanking the UI on a flaky network.
+                snap.windows = previous.windows
+                snap.limitsUpdated = previous.limitsUpdated
+                snap.notes = previous.notes
+                info.state = previousState(info.source)
+                offline = true
+            }
+            snap.credentials.insert(info, at: 0)
+        }
+
+        // API spend.
+        if let key = Keychain.read(Keychain.anthropicAdminKey) {
+            var info = CredentialInfo(source: "Admin key", hint: Fmt.mask(key), state: .unchecked, keychainService: Keychain.anthropicAdminKey)
+            do {
+                snap.spend = try await AnthropicCosts.fetch(adminKey: key)
+                info.state = .valid
+            } catch FetchError.unauthorized {
+                info.state = .rejected
+                problems.append("Your Anthropic Admin key was rejected.")
+            } catch {
+                snap.spend = previous.spend
+                info.state = previousState(info.source)
+                offline = true
+            }
+            snap.credentials.append(info)
+        }
+
+        snap.health = combinedHealth(
+            problems: problems, offline: offline, limits: limitsHealth, connected: !snap.credentials.isEmpty,
+            service: "Anthropic",
+            notConnected: "Sign in to Claude Code, or add a Claude token or an Admin API key.")
         return snap
     }
+}
+
+/// Worst first: broken credentials, then hitting a limit, then being offline.
+func combinedHealth(problems: [String], offline: Bool, limits: ProviderHealth, connected: Bool, service: String, notConnected: String) -> ProviderHealth {
+    if !connected { return .error(notConnected) }
+    if !problems.isEmpty { return .error(problems.joined(separator: " ")) }
+    if case .limited = limits { return limits }
+    if offline { return .warning("Couldn't reach \(service). Showing the last known numbers.") }
+    return limits
 }
 
 /// Live limits come back as `anthropic-ratelimit-unified-*` headers on any Messages call,

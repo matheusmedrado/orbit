@@ -24,17 +24,16 @@ xattr -dr com.apple.quarantine /Applications/Orbit.app
 
 ## Setup
 
-**Claude** reads a Claude Code token from your Keychain. Create one with `claude setup-token`, then paste it into Orbit, or run:
+Orbit uses what you already have:
 
-```sh
-security add-generic-password -a "$USER" -s claude-code-oauth-token -w
-```
-
-**Codex** uses your existing Codex CLI login. Nothing to do.
+- **Claude Pro or Max**: if you're signed in to Claude Code, you're set. macOS asks once before Orbit can read the login.
+- **Codex with ChatGPT**: if you're signed in to Codex, you're set.
+- **API spend**: paste an Admin key from Claude Console or OpenAI Platform into Orbit. Regular API keys can't read usage.
+- **Claude token**: prefer a long-lived token? Paste one from `claude setup-token`.
 
 ## How it works
 
-Orbit checks your limits once a minute and reads token counts from the local Claude Code and Codex logs. The orb in the menu bar reacts: it squints while your agents work, looks doubtful near a limit, frowns in red when you hit one, and smiles when a limit resets.
+Orbit checks your limits and spend once a minute and reads token counts from the local Claude Code and Codex logs. The orb in the menu bar reacts: it squints while your agents work, looks doubtful near a limit, frowns in red when you hit one, and smiles when a limit resets.
 
 Requires macOS 14 or later.
 

@@ -8,8 +8,9 @@ struct PanelView: View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
             VStack(spacing: 10) {
                 header(now: context.date)
-                ProviderCard(snapshot: store.claude, now: context.date)
-                ProviderCard(snapshot: store.codex, now: context.date)
+                ForEach(store.visibleSnapshots, id: \.id) { snapshot in
+                    ProviderCard(snapshot: snapshot, now: context.date)
+                }
             }
             .padding(12)
         }
@@ -57,6 +58,9 @@ private struct SettingsMenu: View {
             if store.loginItem == .needsApproval {
                 Button("Approve in System Settings…") { SMAppService.openSystemSettingsLoginItems() }
             }
+            Divider()
+            Button("Connect Claude…") { store.editingKeyFor = .claude }
+            Button("Connect OpenAI…") { store.editingKeyFor = .codex }
             Divider()
             Button("Open Claude logs") { open(".claude/projects") }
             Button("Open Codex sessions") { open(".codex/sessions") }

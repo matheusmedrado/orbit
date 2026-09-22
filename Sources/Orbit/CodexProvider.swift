@@ -1,47 +1,79 @@
 import Foundation
 
 enum CodexProvider {
+    /// Plan limits come from the ChatGPT login Codex already has; API spend from an OpenAI Admin key.
     static func fetch(previous: ProviderSnapshot, logs: CodexLogScanner) async -> ProviderSnapshot {
         var snap = ProviderSnapshot(id: .codex)
         let scan = await logs.scan()
         snap.local = LocalStats.build(from: scan.events)
         snap.plan = scan.plan.map(\.capitalized)
+        var problems: [String] = []
+        var offline = false
+        var limitsHealth: ProviderHealth = .ok
 
-        guard let auth = CodexAPI.readAuth() else {
-            snap.credential = CredentialInfo(source: "Codex login", hint: nil, state: .missing, editable: false)
-            applyLogLimits(scan, to: &snap)
-            snap.health = snap.windows.isEmpty
-                ? .error("Not signed in to Codex. Run `codex login` in a terminal.")
-                : .warning("Not signed in to Codex. Showing limits from your last session.")
-            return snap
+        func previousState(_ source: String) -> CredentialState {
+            previous.credentials.first { $0.source == source }?.state ?? .unchecked
         }
-        snap.credential = CredentialInfo(source: "ChatGPT login", hint: auth.accountHint, state: .unchecked, editable: false)
 
-        do {
-            let live = try await CodexAPI.usage(auth)
-            snap.windows = live.windows
-            snap.plan = live.plan?.capitalized ?? snap.plan
-            snap.notes = live.notes
-            snap.health = live.limitReached ? .limited("You've hit your Codex limit. It lifts when the window resets.") : .ok
-            snap.limitsUpdated = Date()
-            snap.limitsLive = true
-            snap.credential?.state = .valid
-        } catch FetchError.unauthorized {
-            // Codex refreshes its own login; we never touch the refresh token.
-            snap.credential?.state = .rejected
-            applyLogLimits(scan, to: &snap)
-            snap.health = .warning("Codex login has expired. Run `codex` once to refresh it. Showing limits from logs.")
-        } catch {
-            if previous.limitsLive {
-                snap.windows = previous.windows
-                snap.limitsUpdated = previous.limitsUpdated
+        switch CodexAPI.readAuth() {
+        case .chatGPT(let auth):
+            var info = CredentialInfo(source: "ChatGPT login", hint: auth.accountHint, state: .unchecked)
+            do {
+                let live = try await CodexAPI.usage(auth)
+                snap.windows = live.windows
+                snap.plan = live.plan?.capitalized ?? snap.plan
+                snap.notes = live.notes
+                limitsHealth = live.limitReached ? .limited("You've hit your Codex limit. It lifts when the window resets.") : .ok
+                snap.limitsUpdated = Date()
                 snap.limitsLive = true
-            } else {
+                info.state = .valid
+            } catch FetchError.unauthorized {
+                // Codex refreshes its own login; we never touch the refresh token.
+                info.state = .rejected
                 applyLogLimits(scan, to: &snap)
+                problems.append("Codex login has expired. Run `codex` once to refresh it.")
+            } catch {
+                if previous.limitsLive {
+                    snap.windows = previous.windows
+                    snap.limitsUpdated = previous.limitsUpdated
+                    snap.limitsLive = true
+                } else {
+                    applyLogLimits(scan, to: &snap)
+                }
+                info.state = previousState(info.source)
+                offline = true
             }
-            snap.credential?.state = previous.credential?.state ?? .unchecked
-            snap.health = .warning("Couldn't reach ChatGPT. Showing last known limits.")
+            snap.credentials.append(info)
+        case .apiKey:
+            // API key users have no plan limits, only spend.
+            snap.plan = "API"
+            snap.credentials.append(CredentialInfo(source: "Codex API key", state: .valid))
+        case nil:
+            applyLogLimits(scan, to: &snap)
         }
+
+        if let key = Keychain.read(Keychain.openAIAdminKey) {
+            var info = CredentialInfo(source: "Admin key", hint: Fmt.mask(key), state: .unchecked, keychainService: Keychain.openAIAdminKey)
+            do {
+                snap.spend = try await OpenAICosts.fetch(adminKey: key)
+                info.state = .valid
+            } catch FetchError.unauthorized {
+                info.state = .rejected
+                problems.append("Your OpenAI Admin key was rejected.")
+            } catch {
+                snap.spend = previous.spend
+                info.state = previousState(info.source)
+                offline = true
+            }
+            snap.credentials.append(info)
+        } else if snap.plan == "API" {
+            snap.notes.append("Add an OpenAI Admin key to see what Codex is spending.")
+        }
+
+        snap.health = combinedHealth(
+            problems: problems, offline: offline, limits: limitsHealth, connected: !snap.credentials.isEmpty,
+            service: "OpenAI",
+            notConnected: "Run `codex login`, or add an OpenAI Admin key.")
         return snap
     }
 
@@ -72,14 +104,21 @@ enum CodexAPI {
         var notes: [String]
     }
 
-    static func readAuth() -> Auth? {
+    enum Login {
+        case chatGPT(Auth)
+        case apiKey
+    }
+
+    static func readAuth() -> Login? {
         let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex/auth.json")
         guard let data = try? Data(contentsOf: url),
-              let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              let tokens = json.dict("tokens"),
-              let access = tokens["access_token"] as? String, !access.isEmpty
+              let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         else { return nil }
-        return Auth(accessToken: access, accountID: tokens["account_id"] as? String)
+        if let tokens = json.dict("tokens"), let access = tokens["access_token"] as? String, !access.isEmpty {
+            return .chatGPT(Auth(accessToken: access, accountID: tokens["account_id"] as? String))
+        }
+        if let key = json["OPENAI_API_KEY"] as? String, !key.isEmpty { return .apiKey }
+        return nil
     }
 
     /// Read-only GET of the same usage data Codex's `/status` shows.

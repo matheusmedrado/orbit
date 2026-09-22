@@ -120,11 +120,13 @@ enum ProviderHealth: Equatable {
 
 enum CredentialState: Equatable { case valid, rejected, missing, unchecked }
 
-struct CredentialInfo: Equatable {
+struct CredentialInfo: Equatable, Identifiable {
     var source: String
-    var hint: String?
+    var hint: String? = nil
     var state: CredentialState
-    var editable: Bool
+    /// The Keychain item Orbit manages for this credential, so it can be removed.
+    var keychainService: String? = nil
+    var id: String { source }
 }
 
 struct ProviderSnapshot: Equatable {
@@ -134,13 +136,23 @@ struct ProviderSnapshot: Equatable {
     var plan: String?
     var notes: [String] = []
     var local = LocalStats()
-    var credential: CredentialInfo?
+    var credentials: [CredentialInfo] = []
+    /// API spend, when an Admin key is set up.
+    var spend: Spend?
     /// When `windows` were last fetched successfully.
     var limitsUpdated: Date?
     /// True when limits came from a live API call rather than from logs.
     var limitsLive = false
 
     var peakUtilization: Double { windows.map(\.utilization).max() ?? 0 }
+
+    /// Worth a card: something is connected, or there's local activity.
+    var isInUse: Bool {
+        credentials.contains { $0.state != .missing } || local.lastActivity != nil
+    }
+
+    /// A key or login that used to work is being rejected.
+    var hasRejectedCredential: Bool { credentials.contains { $0.state == .rejected } }
 }
 
 enum IconSeverity { case normal, warning, critical }

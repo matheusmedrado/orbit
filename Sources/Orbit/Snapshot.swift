@@ -18,6 +18,9 @@ enum Snapshot {
         let dark = args.contains("--dark")
         Task { @MainActor in
             while store.lastRefresh == nil { try? await Task.sleep(for: .milliseconds(200)) }
+            if args.contains("--connect") { store.editingKeyFor = .claude }
+            // Sample numbers, to check the layout of the API spend row.
+            if args.contains("--sample-spend") { store.claude.spend = Spend(today: 1.84, month: 42.17, currency: "USD") }
             renderPanel(store: store, animator: animator, dark: dark, to: path)
             exit(0)
         }
