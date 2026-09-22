@@ -43,6 +43,17 @@ Requires macOS 14 or later.
 ./build.sh install
 ```
 
+## Contributing
+
+Issues and pull requests are welcome.
+
+1. Fork the repo and create a branch.
+2. Build and try your change with `./build.sh install`.
+3. Make sure `/Applications/Orbit.app/Contents/MacOS/Orbit --selftest` passes.
+4. Open a pull request with a short description of what changed and why.
+
+Every pull request is reviewed before it's merged. Small, focused changes are easiest to review.
+
 ## Credits
 
 The orb is adapted from [SmoothUI's AI Orb Face](https://smoothui.dev/docs/components/ai-orb-face). Claude and Codex are trademarks of their respective owners.
