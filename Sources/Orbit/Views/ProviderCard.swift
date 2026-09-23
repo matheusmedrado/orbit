@@ -211,20 +211,34 @@ private struct ProviderMark: View {
 }
 
 private struct ActivityDot: View {
-    @State private var pulse = false
+    @Environment(\.panelIsVisible) private var panelIsVisible
+
     var body: some View {
         HStack(spacing: 5) {
-            Circle()
-                .fill(.green)
-                .frame(width: 7, height: 7)
-                .opacity(pulse ? 0.35 : 1)
-                .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: pulse)
-                .onAppear { pulse = true }
+            // Removing the pulsing view is the only sure way to stop a repeatForever.
+            if panelIsVisible {
+                PulsingDot()
+            } else {
+                Circle().fill(.green).frame(width: 7, height: 7)
+            }
             Text("Working")
         }
         .font(.caption)
         .foregroundStyle(.secondary)
         .help("Activity in the last 2 minutes")
+    }
+}
+
+private struct PulsingDot: View {
+    @State private var pulse = false
+
+    var body: some View {
+        Circle()
+            .fill(.green)
+            .frame(width: 7, height: 7)
+            .opacity(pulse ? 0.35 : 1)
+            .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true), value: pulse)
+            .onAppear { pulse = true }
     }
 }
 

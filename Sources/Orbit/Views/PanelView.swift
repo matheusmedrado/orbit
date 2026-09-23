@@ -3,9 +3,12 @@ import SwiftUI
 
 struct PanelView: View {
     @Environment(UsageStore.self) private var store
+    @State private var isVisible = true
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { context in
+        // MenuBarExtra only hides its window on close, so stop ticking and
+        // animating while the panel is off screen.
+        TimelineView(.animation(minimumInterval: 1, paused: !isVisible)) { context in
             VStack(spacing: 10) {
                 header(now: context.date)
                 ForEach(store.visibleSnapshots, id: \.id) { snapshot in
@@ -15,6 +18,8 @@ struct PanelView: View {
             .padding(12)
         }
         .frame(width: 340)
+        .environment(\.panelIsVisible, isVisible)
+        .background(VisibilityReader(isVisible: $isVisible))
     }
 
     private func header(now: Date) -> some View {
@@ -77,5 +82,54 @@ private struct SettingsMenu: View {
 
     private func open(_ path: String) {
         NSWorkspace.shared.open(FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(path))
+    }
+}
+
+private struct PanelIsVisibleKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
+extension EnvironmentValues {
+    var panelIsVisible: Bool {
+        get { self[PanelIsVisibleKey.self] }
+        set { self[PanelIsVisibleKey.self] = newValue }
+    }
+}
+
+/// Reports whether the hosting window is on screen, from its occlusion state.
+private struct VisibilityReader: NSViewRepresentable {
+    @Binding var isVisible: Bool
+
+    func makeNSView(context: Context) -> ReaderView {
+        let view = ReaderView()
+        view.onChange = { visible in
+            if isVisible != visible { isVisible = visible }
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: ReaderView, context: Context) {}
+
+    final class ReaderView: NSView {
+        var onChange: (Bool) -> Void = { _ in }
+        private var observer: NSObjectProtocol?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let observer { NotificationCenter.default.removeObserver(observer) }
+            observer = nil
+            guard let window else { return }
+            observer = NotificationCenter.default.addObserver(
+                forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main
+            ) { [weak self] _ in self?.report() }
+            report()
+        }
+
+        private func report() {
+            guard let window else { return }
+            let visible = window.occlusionState.contains(.visible)
+            // Never write SwiftUI state in the middle of a view update.
+            DispatchQueue.main.async { self.onChange(visible) }
+        }
     }
 }
