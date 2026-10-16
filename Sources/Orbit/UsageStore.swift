@@ -6,7 +6,10 @@ import ServiceManagement
 @Observable
 final class UsageStore {
     var claude = ProviderSnapshot(id: .claude)
+    /// Extra Claude Code logins (`~/.claude-*`), one card each.
+    var claudeAccounts: [ProviderSnapshot] = []
     var codex = ProviderSnapshot(id: .codex)
+    var grok = ProviderSnapshot(id: .grok)
     private(set) var isRefreshing = false
     private(set) var lastRefresh: Date?
     private(set) var refreshInterval: TimeInterval
@@ -17,18 +20,19 @@ final class UsageStore {
     @ObservationIgnored private let claudeLogs = ClaudeLogScanner()
     @ObservationIgnored private let codexLogs = CodexLogScanner()
     @ObservationIgnored private let claudeLogin = ClaudeCodeLogin.Reader()
+    @ObservationIgnored private var accountLogins: [String: ClaudeCodeLogin.Reader] = [:]
     /// Which card is showing the key editor, if any.
     var editingKeyFor: ProviderID?
     @ObservationIgnored private var observers: [(NotificationCenter, NSObjectProtocol)] = []
 
     static let intervals: [TimeInterval] = [30, 60, 120, 300]
 
-    var snapshots: [ProviderSnapshot] { [claude, codex] }
+    var snapshots: [ProviderSnapshot] { [claude] + claudeAccounts + [codex, grok] }
 
-    /// Cards to show: the providers in use, or both when nothing is set up yet.
+    /// Cards in use. When none are connected, the providers that take a pasted key.
     var visibleSnapshots: [ProviderSnapshot] {
         let used = snapshots.filter { $0.isInUse || editingKeyFor == $0.id }
-        return used.isEmpty ? snapshots : used
+        return used.isEmpty ? snapshots.filter { $0.id.facts.pastedKeyTitle != nil } : used
     }
 
     var severity: IconSeverity {
@@ -68,14 +72,35 @@ final class UsageStore {
         isRefreshing = true
         async let c = ClaudeProvider.fetch(previous: claude, logs: claudeLogs, login: claudeLogin)
         async let x = CodexProvider.fetch(previous: codex, logs: codexLogs)
-        let (newClaude, newCodex) = await (c, x)
-        if Self.didReset(from: claude, to: newClaude) || Self.didReset(from: codex, to: newCodex) {
+        async let a = fetchClaudeAccounts()
+        async let g = GrokSubscription.fetch(previous: grok)
+        let (newClaude, newCodex, newAccounts, newGrok) = await (c, x, a, g)
+        let accountResets = newAccounts.contains { new in
+            claudeAccounts.first { $0.account == new.account }.map { Self.didReset(from: $0, to: new) } ?? false
+        }
+        if Self.didReset(from: claude, to: newClaude)
+            || Self.didReset(from: codex, to: newCodex)
+            || Self.didReset(from: grok, to: newGrok)
+            || accountResets {
             celebrate()
         }
         claude = newClaude
+        claudeAccounts = newAccounts
         codex = newCodex
+        grok = newGrok
         lastRefresh = Date()
         isRefreshing = false
+    }
+
+    private func fetchClaudeAccounts() async -> [ProviderSnapshot] {
+        var result: [ProviderSnapshot] = []
+        for account in ClaudeCodeLogin.extraAccounts() {
+            let login = accountLogins[account.name] ?? ClaudeCodeLogin.Reader(configDir: account.dir)
+            accountLogins[account.name] = login
+            let previous = claudeAccounts.first { $0.account == account.name } ?? ProviderSnapshot(id: .claude, account: account.name)
+            result.append(await ClaudeProvider.fetch(account: account.name, previous: previous, login: login))
+        }
+        return result
     }
 
     /// A window reset if its usage dropped noticeably (e.g. 80% -> 0%) since the last live reading.

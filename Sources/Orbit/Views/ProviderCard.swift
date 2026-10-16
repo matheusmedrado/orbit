@@ -9,7 +9,7 @@ struct ProviderCard: View {
     @Environment(UsageStore.self) private var store
 
     private var accent: Color { snapshot.id.accent }
-    private var editing: Bool { store.editingKeyFor == snapshot.id }
+    private var editing: Bool { store.editingKeyFor == snapshot.id && snapshot.canEditKey }
     /// Show the accounts section when something needs attention.
     private var needsAttention: Bool {
         snapshot.credentials.isEmpty || snapshot.hasRejectedCredential
@@ -39,9 +39,11 @@ struct ProviderCard: View {
                 AccountsSection(snapshot: snapshot, limitsSource: limitsSource)
             }
 
-            summaryRow
+            if snapshot.showsLocalLogs {
+                summaryRow
+            }
 
-            if expanded {
+            if expanded, snapshot.showsLocalLogs {
                 DetailsView(snapshot: snapshot, accent: accent)
                     .transition(.opacity)
             }
@@ -57,7 +59,7 @@ struct ProviderCard: View {
             ProviderMark(id: snapshot.id)
             Text(snapshot.id.displayName)
                 .font(.system(size: 14, weight: .semibold))
-            if let plan = snapshot.plan {
+            if let plan = snapshot.plan ?? snapshot.account {
                 Text(plan)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -131,17 +133,29 @@ private struct DetailsView: View {
 
 // MARK: - Pieces
 
+extension ProviderSnapshot {
+    var canEditKey: Bool { account == nil && id.facts.pastedKeyTitle != nil }
+    var showsLocalLogs: Bool { account == nil && id.facts.readsLocalLogs }
+}
+
 extension ProviderID {
     var accent: Color {
         switch self {
         case .claude: Color(red: 0.85, green: 0.47, blue: 0.34)
         case .codex: Color(red: 0.36, green: 0.42, blue: 1.0)
+        case .grok: Color(red: 0.45, green: 0.47, blue: 0.50)
         }
     }
 
     /// Bundled logo (Resources/<id>-logo.png), falling back to the source tree when
-    /// running the bare binary during development.
-    var logo: NSImage? { self == .claude ? Self.claudeLogo : Self.codexLogo }
+    /// running the bare binary during development. Grok has no image, so the mark draws `symbol`.
+    var logo: NSImage? {
+        switch self {
+        case .claude: Self.claudeLogo
+        case .codex: Self.codexLogo
+        case .grok: nil
+        }
+    }
     private static let claudeLogo = loadLogo("claude")
     private static let codexLogo = loadLogo("codex")
 
@@ -158,6 +172,7 @@ extension ProviderID {
         switch self {
         case .claude: "sparkle"
         case .codex: "chevron.left.forwardslash.chevron.right"
+        case .grok: "moon.stars"
         }
     }
 }
@@ -337,7 +352,8 @@ private struct AccountsSection: View {
     let limitsSource: String
     @Environment(UsageStore.self) private var store
 
-    private var editing: Bool { store.editingKeyFor == snapshot.id }
+    /// Keys belong to the main card; an extra account is just its Claude Code login.
+    private var editing: Bool { store.editingKeyFor == snapshot.id && snapshot.canEditKey }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -346,7 +362,7 @@ private struct AccountsSection: View {
             }
             if editing {
                 KeyEditor(provider: snapshot.id)
-            } else {
+            } else if snapshot.canEditKey {
                 Button(snapshot.credentials.isEmpty ? "Connect…" : "Add a key…") { store.editingKeyFor = snapshot.id }
                     .buttonStyle(.link)
                     .font(.caption)

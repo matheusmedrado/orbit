@@ -8,7 +8,8 @@ let package = Package(
         .executableTarget(
             name: "Orbit",
             path: "Sources/Orbit",
-            swiftSettings: [.swiftLanguageMode(.v5)]
+            swiftSettings: [.swiftLanguageMode(.v5)],
+            linkerSettings: [.linkedLibrary("sqlite3")]
         )
     ]
 )

@@ -30,6 +30,7 @@ Orbit uses what you already have:
 - **Codex with ChatGPT**: if you're signed in to Codex, you're set.
 - **API spend**: paste an Admin key from Claude Console or OpenAI Platform into Orbit. Regular API keys can't read usage.
 - **Claude token**: prefer a long-lived token? Paste one from `claude setup-token`.
+- **More Claude accounts**: a login kept in its own folder with `CLAUDE_CONFIG_DIR=~/.claude-<name>` gets its own card.
 
 ## How it works
 

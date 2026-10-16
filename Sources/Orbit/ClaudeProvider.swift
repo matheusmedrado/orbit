@@ -81,6 +81,48 @@ enum ClaudeProvider {
             notConnected: "Sign in to Claude Code, or add a Claude token or an Admin API key.")
         return snap
     }
+
+    /// Limits for an extra Claude Code login. Token counts stay on the main card, since the
+    /// logs can't tell accounts apart.
+    static func fetch(account: String, previous: ProviderSnapshot, login: ClaudeCodeLogin.Reader) async -> ProviderSnapshot {
+        var snap = ProviderSnapshot(id: .claude, account: account)
+        guard let cc = await login.current() else {
+            snap.health = .error("Couldn't read the \(account) login. Sign in to Claude Code with it again.")
+            return snap
+        }
+        snap.plan = cc.plan
+        var info = CredentialInfo(source: "Claude Code login", state: .unchecked)
+        func keepPrevious() {
+            snap.windows = previous.windows
+            snap.limitsUpdated = previous.limitsUpdated
+            snap.notes = previous.notes
+        }
+        if cc.isExpired {
+            // Claude Code only refreshes it while that account is in use, so this is normal.
+            keepPrevious()
+            snap.health = .warning("Open Claude Code with \(account) to refresh these limits.")
+        } else {
+            do {
+                let probe = try await ClaudeLimitsAPI.probe(token: cc.accessToken)
+                snap.windows = probe.windows
+                snap.notes = probe.notes
+                snap.limitsUpdated = Date()
+                snap.limitsLive = true
+                snap.health = probe.health
+                info.state = .valid
+            } catch FetchError.unauthorized {
+                await login.invalidate()
+                info.state = .rejected
+                snap.health = .error("The \(account) login was rejected. Sign in to Claude Code with it again.")
+            } catch {
+                keepPrevious()
+                info.state = previous.credentials.first?.state ?? .unchecked
+                snap.health = .warning("Couldn't reach Anthropic. Showing the last known numbers.")
+            }
+        }
+        snap.credentials = [info]
+        return snap
+    }
 }
 
 /// Worst first: broken credentials, then hitting a limit, then being offline.
