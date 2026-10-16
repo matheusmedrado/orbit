@@ -3,7 +3,7 @@ import SwiftUI
 
 struct PanelView: View {
     @Environment(UsageStore.self) private var store
-    @State private var isVisible = true
+    @UIState private var isVisible = true
 
     var body: some View {
         // MenuBarExtra only hides its window on close, so stop ticking and

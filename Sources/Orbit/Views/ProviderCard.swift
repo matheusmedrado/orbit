@@ -5,7 +5,7 @@ struct ProviderCard: View {
     let snapshot: ProviderSnapshot
     let now: Date
 
-    @State private var expanded = false
+    @UIState private var expanded = false
     @Environment(UsageStore.self) private var store
 
     private var accent: Color { snapshot.id.accent }
@@ -245,7 +245,7 @@ private struct ActivityDot: View {
 }
 
 private struct PulsingDot: View {
-    @State private var pulse = false
+    @UIState private var pulse = false
 
     var body: some View {
         Circle()
@@ -375,7 +375,7 @@ struct CredentialRow: View {
     let credential: CredentialInfo
     let source: String
     @Environment(UsageStore.self) private var store
-    @State private var confirming = CredentialRow.previewConfirming
+    @UIState private var confirming = CredentialRow.previewConfirming
 
     /// Lets `Orbit --snapshot ... --confirm-remove` render the confirmation state.
     nonisolated(unsafe) static var previewConfirming = false
@@ -470,8 +470,8 @@ private struct RemoveConfirmation: View {
 private struct KeyEditor: View {
     let provider: ProviderID
     @Environment(UsageStore.self) private var store
-    @State private var draft = ""
-    @State private var error: String?
+    @UIState private var draft = ""
+    @UIState private var error: String?
     @FocusState private var focused: Bool
 
     private var trimmed: String { draft.trimmingCharacters(in: .whitespacesAndNewlines) }
