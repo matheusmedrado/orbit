@@ -2,8 +2,8 @@ import SwiftUI
 
 @main
 struct OrbitApp: App {
-    @State private var store = UsageStore()
-    @State private var animator = FaceAnimator()
+    @UIState private var store = UsageStore()
+    @UIState private var animator = FaceAnimator()
 
     init() {
         SelfTest.runIfRequested()
