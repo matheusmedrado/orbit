@@ -45,13 +45,10 @@ struct ProviderCard: View {
 
             if expanded, snapshot.showsLocalLogs {
                 DetailsView(snapshot: snapshot, accent: accent)
-                    .transition(.opacity)
             }
         }
         .padding(14)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .animation(.smooth(duration: 0.25), value: expanded)
-        .animation(.smooth(duration: 0.25), value: editing)
     }
 
     private var titleRow: some View {
@@ -90,6 +87,7 @@ struct ProviderCard: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.tertiary)
                     .rotationEffect(.degrees(expanded ? 180 : 0))
+                    .animation(.smooth(duration: 0.25), value: expanded)
             }
             .contentShape(Rectangle())
         }
