@@ -9,8 +9,14 @@ enum Dump {
         Task.detached {
             let start = Date()
             let claude = await ClaudeProvider.fetch(previous: ProviderSnapshot(id: .claude), logs: ClaudeLogScanner(), login: ClaudeCodeLogin.Reader())
+            var accounts: [ProviderSnapshot] = []
+            for account in ClaudeCodeLogin.extraAccounts() {
+                accounts.append(await ClaudeProvider.fetch(account: account.name, previous: ProviderSnapshot(id: .claude, account: account.name),
+                                                           login: ClaudeCodeLogin.Reader(configDir: account.dir)))
+            }
             let codex = await CodexProvider.fetch(previous: ProviderSnapshot(id: .codex), logs: CodexLogScanner())
-            for s in [claude, codex] { print(describe(s)) }
+            let grok = await GrokSubscription.fetch(previous: ProviderSnapshot(id: .grok))
+            for s in [claude] + accounts + [codex, grok] { print(describe(s)) }
             print(String(format: "fetched in %.2fs", Date().timeIntervalSince(start)))
             exit(0)
         }
@@ -37,10 +43,11 @@ enum Dump {
 
     private static func describe(_ s: ProviderSnapshot) -> String {
         let now = Date()
-        var out = ["== \(s.id.displayName)\(s.plan.map { " (\($0))" } ?? "") · health: \(s.health)"]
+        var out = ["== \(s.id.displayName)\(s.plan.map { " (\($0))" } ?? "")\(s.account.map { " [\($0)]" } ?? "") · health: \(s.health)"]
         for w in s.windows {
             let reset = w.remaining(at: now).map { "resets in \(Fmt.duration($0))" } ?? "no reset"
-            out.append("  \(w.label): \(Fmt.percent(w.utilization)) · \(reset)")
+            let allowance = w.allowance.map { " · \($0.summary)" } ?? ""
+            out.append("  \(w.label): \(Fmt.percent(w.utilization)) · \(reset)\(allowance)")
         }
         out.append("  limits: \(s.limitsLive ? "live" : "logs") · credentials: " + (s.credentials.isEmpty ? "none" : s.credentials.map { "\($0.source) \($0.hint ?? "") \($0.state)" }.joined(separator: ", ")))
         if let spend = s.spend { out.append("  spend: \(spend.format(spend.today)) today · \(spend.format(spend.month)) this month") }

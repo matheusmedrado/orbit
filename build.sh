@@ -10,7 +10,9 @@ APP=build/Orbit.app
 
 build_arch() {
     swift build -c release --triple "$1-apple-macosx14.0" >&2
-    echo "$(swift build -c release --triple "$1-apple-macosx14.0" --show-bin-path)/Orbit"
+    # Newer SwiftPM builds every triple into the same folder, so keep a copy per arch.
+    cp "$(swift build -c release --triple "$1-apple-macosx14.0" --show-bin-path)/Orbit" ".build/Orbit-$1"
+    echo ".build/Orbit-$1"
 }
 
 ARM=$(build_arch arm64)

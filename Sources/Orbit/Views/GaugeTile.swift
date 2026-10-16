@@ -16,6 +16,14 @@ struct GaugeTile: View {
                 Text(window.label)
                     .font(.system(size: 13, weight: .semibold))
                     .lineLimit(1)
+                if let summary = window.allowance?.summary {
+                    Text(summary)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                }
                 Text(resetText)
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -59,6 +67,7 @@ struct GaugeTile: View {
 
     private var helpText: String {
         var text = "\(window.label): \(Fmt.percent(window.utilization)) used"
+        if let summary = window.allowance?.summary { text += " · \(summary)" }
         if let reset = window.resetsAt {
             text += " · resets \(reset.formatted(date: .abbreviated, time: .shortened))"
         }

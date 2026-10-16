@@ -11,7 +11,7 @@ struct PanelView: View {
         TimelineView(.animation(minimumInterval: 1, paused: !isVisible)) { context in
             VStack(spacing: 10) {
                 header(now: context.date)
-                ForEach(store.visibleSnapshots, id: \.id) { snapshot in
+                ForEach(store.visibleSnapshots, id: \.key) { snapshot in
                     ProviderCard(snapshot: snapshot, now: context.date)
                 }
             }
@@ -64,8 +64,11 @@ private struct SettingsMenu: View {
                 Button("Approve in System Settings…") { SMAppService.openSystemSettingsLoginItems() }
             }
             Divider()
-            Button("Connect Claude…") { store.editingKeyFor = .claude }
-            Button("Connect OpenAI…") { store.editingKeyFor = .codex }
+            ForEach(ProviderID.allCases) { id in
+                if let title = id.facts.pastedKeyTitle {
+                    Button(title) { store.editingKeyFor = id }
+                }
+            }
             Divider()
             Button("Open Claude logs") { open(".claude/projects") }
             Button("Open Codex sessions") { open(".codex/sessions") }

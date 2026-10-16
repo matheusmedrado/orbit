@@ -1,26 +1,127 @@
 import Foundation
 
-enum ProviderID: String, CaseIterable, Identifiable {
-    case claude, codex
-    var id: String { rawValue }
-    var displayName: String { self == .claude ? "Claude" : "Codex" }
+struct ProviderFacts: Equatable {
+    var displayName: String
+    /// Settings label for a pasted key. Nil means this provider has no key editor.
+    var pastedKeyTitle: String?
+    var readsLocalLogs: Bool
 }
 
-/// One rate-limit window (e.g. the 5-hour session or the weekly cap).
+enum ProviderID: String, CaseIterable, Identifiable {
+    case claude, codex, grok
+    var id: String { rawValue }
+
+    var facts: ProviderFacts {
+        switch self {
+        case .claude:
+            ProviderFacts(displayName: "Claude", pastedKeyTitle: "Connect Claude…", readsLocalLogs: true)
+        case .codex:
+            ProviderFacts(displayName: "Codex", pastedKeyTitle: "Connect OpenAI…", readsLocalLogs: true)
+        case .grok:
+            ProviderFacts(displayName: "Grok", pastedKeyTitle: nil, readsLocalLogs: false)
+        }
+    }
+
+    var displayName: String { facts.displayName }
+}
+
+/// Included and spent amounts in major currency units. Remaining and the spent fraction come from these two.
+struct PlanAllowance: Equatable {
+    let included: Decimal
+    let spent: Decimal
+    let currencyCode: String
+
+    init(included: Decimal, spent: Decimal, currencyCode: String) {
+        self.included = max(included, 0)
+        self.spent = max(spent, 0)
+        self.currencyCode = currencyCode
+    }
+
+    var remaining: Decimal { max(included - spent, 0) }
+
+    var fractionSpent: Double {
+        guard included > 0 else { return spent > 0 ? 1 : 0 }
+        let ratio = NSDecimalNumber(decimal: spent / included).doubleValue
+        if ratio.isNaN { return 0 }
+        return min(max(ratio, 0), 1)
+    }
+
+    /// "$15 left of $20"
+    var summary: String { "\(format(remaining)) left of \(format(included))" }
+
+    private func format(_ amount: Decimal) -> String {
+        var original = amount
+        var rounded = Decimal()
+        NSDecimalRound(&rounded, &original, 0, .plain)
+        let places = rounded == amount ? 0 : 2
+        return amount.formatted(
+            .currency(code: currencyCode)
+                .locale(Locale(identifier: "en_US"))
+                .precision(.fractionLength(places)))
+    }
+}
+
+enum IncludedPeriod: Equatable {
+    case weekly
+    case monthly
+
+    var label: String { self == .weekly ? "Weekly" : "Monthly" }
+
+    /// Pace window. A month has no fixed length, so the gauge only counts down to `resetsAt`.
+    var duration: TimeInterval? { self == .weekly ? 7 * 86400 : nil }
+}
+
+/// One rate-limit window (e.g. the 5-hour session or the weekly cap), or one included-usage pool.
 struct LimitWindow: Identifiable, Equatable {
+    static let includedUsageID = "included"
+
     let id: String
     let label: String
-    /// 0...1
-    let utilization: Double
+    private let measuredUtilization: Double
     let resetsAt: Date?
     /// Total window length, used for pace/forecast.
     let duration: TimeInterval?
+    let allowance: PlanAllowance?
+
+    /// Rate-limit fraction, or the allowance's spent fraction when this is an included pool.
+    var utilization: Double { allowance?.fractionSpent ?? measuredUtilization }
+
+    init(id: String, label: String, utilization: Double, resetsAt: Date?, duration: TimeInterval?) {
+        self.init(id: id, label: label, measuredUtilization: utilization, resetsAt: resetsAt, duration: duration, allowance: nil)
+    }
+
+    /// The only constructor that sets `allowance`. A `resetsAt` in the past does not change the fraction.
+    static func includedUsage(
+        period: IncludedPeriod,
+        included: Decimal,
+        spent: Decimal,
+        currencyCode: String,
+        resetsAt: Date
+    ) -> LimitWindow {
+        let allowance = PlanAllowance(included: included, spent: spent, currencyCode: currencyCode)
+        return LimitWindow(
+            id: includedUsageID,
+            label: period.label,
+            measuredUtilization: allowance.fractionSpent,
+            resetsAt: resetsAt,
+            duration: period.duration,
+            allowance: allowance)
+    }
 
     func remaining(at now: Date) -> TimeInterval? { resetsAt.map { max(0, $0.timeIntervalSince(now)) } }
 
     func elapsedFraction(at now: Date) -> Double? {
         guard let duration, duration > 0, let remaining = remaining(at: now) else { return nil }
         return min(max(1 - remaining / duration, 0), 1)
+    }
+
+    private init(id: String, label: String, measuredUtilization: Double, resetsAt: Date?, duration: TimeInterval?, allowance: PlanAllowance?) {
+        self.id = id
+        self.label = label
+        self.measuredUtilization = measuredUtilization
+        self.resetsAt = resetsAt
+        self.duration = duration
+        self.allowance = allowance
     }
 }
 
@@ -131,6 +232,8 @@ struct CredentialInfo: Equatable, Identifiable {
 
 struct ProviderSnapshot: Equatable {
     let id: ProviderID
+    /// Set for an extra Claude Code login (e.g. "claude-work" for `~/.claude-work`).
+    var account: String? = nil
     var windows: [LimitWindow] = []
     var health: ProviderHealth = .unknown
     var plan: String?
@@ -143,6 +246,9 @@ struct ProviderSnapshot: Equatable {
     var limitsUpdated: Date?
     /// True when limits came from a live API call rather than from logs.
     var limitsLive = false
+
+    /// Unique per card, since extra Claude accounts share the `.claude` id.
+    var key: String { account.map { "\(id.rawValue):\($0)" } ?? id.rawValue }
 
     var peakUtilization: Double { windows.map(\.utilization).max() ?? 0 }
 

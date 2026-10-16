@@ -40,6 +40,7 @@ enum SelfTest {
         check("claude code login token", login?.accessToken == "sk-ant-oat01-test")
         check("claude code login plan", login?.plan == "Max")
         check("claude code login not expired", login?.isExpired == false)
+        check("claude config dir keychain item", ClaudeCodeLogin.keychainService(configDir: "/Users/test/.claude-work") == "Claude Code-credentials-03abf0ee")
 
         // Key detection.
         check("key: setup token", KeyKind("sk-ant-oat01-abc") == .claudeToken)
@@ -47,6 +48,8 @@ enum SelfTest {
         check("key: anthropic standard rejected", KeyKind("sk-ant-api03-abc").problem != nil)
         check("key: openai admin", KeyKind("sk-admin-abc") == .openAIAdmin)
         check("key: openai project key rejected", KeyKind("sk-proj-abc").problem != nil)
+
+        failures += GrokSubscription.selfTest()
 
         print(failures == 0 ? "all passed" : "\(failures) failed")
         exit(failures == 0 ? 0 : 1)
